@@ -13,6 +13,10 @@ This branch is to optimize the physical variables instead of polynomial coeffici
 ### 1. Minimum Snap Model
 I write a blog about this paper in Chinese. You can read [this blog](https://github.com/LOTEAT/PaperReading/blob/main/MotionPlanning/TrajectoryGeneration/MinimumSnap/minimum_snap.md) to understand this model.
 
+I write two optimization methods for this model.
+- [Optimize Polynomial Coefficients](https://github.com/LOTEAT/MinimumSnap-Demo)
+- [Optimize Physical Variables](https://github.com/LOTEAT/MinimumSnap-Demo/tree/physics)
+
 
 ### 2. Code
 #### 2.1 Quadratic Matrix
