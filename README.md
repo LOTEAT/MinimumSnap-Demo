@@ -8,7 +8,7 @@
 -->
 ## Minimum Snap Demo
 
-This is a repository for `Minimum Snap Model`. If you want to know more about `Minimum Snap Model`, you can read [this paper](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=5980409).
+This branch is to optimize the physical variables instead of polynomial coefficients. If you want to know more about `Minimum Snap Model`, you can read [this paper](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=5980409).
 
 ### 1. Minimum Snap Model
 I write a blog about this paper in Chinese. You can read [this blog](https://github.com/LOTEAT/PaperReading/blob/main/MotionPlanning/TrajectoryGeneration/MinimumSnap/minimum_snap.md) to understand this model.
@@ -151,8 +151,10 @@ Here is my implementation.
             Q.append(seg_Q)
         return block_diag(*Q)
 ```
-#### 2.2 Constraints
-For minimum snap model, we need to add some constraints. But before it, I would like to calculate a matrix $A$, using $A$ and $p$ we can easily calculate the position $p$, velocity $v$, acceleration $a$, and jerk $j$, which is 
+#### 2.2 Mapping Matrix
+We hope to find a matrix to map polynomial coefficients to physical variables, like $p, v, a, j$. It means that we need to find a matrix $M$, and using $M$ we can get $d=Mp$. $d = \left[\begin{array}{c}p^{start}_1  & v^{start}_1 & a^{start}_1 & j^{start}_1 \dots & p^{end}_{m} & v^{end}_{m} & a^{end}_{m} & j^{end}_{m} \end{array}\right]^T$. Totally we have $2m$ variables.
+
+I would like to calculate a matrix $A$, using $A$ and $p$ we can easily calculate the position $p$, velocity $v$, acceleration $a$, and jerk $j$, which is 
 $$
 \begin{aligned}
 \left[\begin{array}{cccc}
@@ -200,81 +202,120 @@ This function is to calculate the $A$.
             motion_coef.append(poly_coef_pad * t_value)
         return np.array(motion_coef)
 ```
-#### 2.3.1 Start Constraints
-For the start point, we define 
-$$
-\left[\begin{array}{cccc}
-p& v& a &j 
-\end{array}\right]^T = \left[\begin{array}{cccc}
-p_{start}& 0 & 0 & 0 
-\end{array}\right]^T
-$$
-The code is
+Using `get_motion_coef`, we can quickly calculate the $M$ matrix.
 ```python
-        n_var = self.n_seg * (self.n_order + 1)
-        Aeq_start = np.zeros((4, n_var))
-        Aeq_start[:4, :self.n_poly] = self.get_motion_coef(0)
-        beq_start = self.start_cond
+    def get_mapping_matrix(self):
+        M = []
+        for i in range(self.n_seg):
+            seg_time = self.seg_time[i]
+            start_mapping_mat = self.get_motion_coef(0)
+            end_mapping_mat = self.get_motion_coef(seg_time)
+            seg_M = np.vstack([start_mapping_mat, end_mapping_mat])
+            M.append(seg_M)
+        return block_diag(*M)
 ```
-For each segment, we have `n_poly = n_order + 1` variables, so we have `n_var=n_seg * (n_order + 1)` variables totally. And the first `n_poly` variables are coresponding to the first segment.
+#### 2.3 Selecting Matrix
+To optimize this problem, we can construct a selecting matrix $C$ to seperate the fixed variables and constrained variables, which is 
 
-#### 2.3.2 End Constraints
-For the end point, we define 
 $$
-\left[\begin{array}{cccc}
-p& v& a &j 
-\end{array}\right]^T = \left[\begin{array}{cccc}
-p_{end}& 0 & 0 & 0 
-\end{array}\right]^T
+\mathbf{C}^T\left[\begin{array}{c}
+\mathbf{d}_F \\
+\mathbf{d}_P
+\end{array}\right]=\left[\begin{array}{c}
+\mathbf{d}_1 \\
+\vdots \\
+\mathbf{d}_M
+\end{array}\right] 
 $$
-The code is
+
+Note that $d_F = \left[\begin{array}{c}p^{start}_1  & v^{start}_1 & a^{start}_1 & j^{start}_1 & p_2 &  p_3&  p_4& \dots & p^{end}_{m} & v^{end}_{m} & a^{end}_{m} & j^{end}_{m} \end{array}\right]^T$, $d_P = \left[\begin{array}{c} v^{end}_1 & a^{end}_1 & j^{end}_1 & \dots & v^{start}_{m} & a^{start}_{m} & j^{start}_{m} \end{array}\right]^T$, 
+$d = \left[\begin{array}{c}p^{start}_1  & v^{start}_1 & a^{start}_1 & j^{start}_1 \dots & p^{end}_{m} & v^{end}_{m} & a^{end}_{m} & j^{end}_{m} \end{array}\right]^T$. $d_F$ contains $v^{start}_0, a^{start}_0, j^{start}_0, v^{end}_{m}, a^{end}_{m}, j^{end}_{m}$ because these values are 0. And we can construct a 0-1 matrix to get this selecting matrix.
+
+
 ```python
-        Aeq_end = np.zeros((4, n_var))
-        Aeq_end[:4, -self.n_poly:] = self.get_motion_coef(self.seg_time[-1])
-        beq_end = self.end_cond
-        Aeq.append(Aeq_end)
-        beq.append(beq_end)
-```
-#### 2.3.3 Position Constraints
-For the middle points, we should also add position constraints.
-```python
-        Aeq_pos = np.zeros((self.n_seg - 1, n_var))
-        beq_pos = np.zeros(self.n_seg - 1)
+    def get_selecting_matrix(self):
+        selecting_mat = []
+        n_var = (self.n_seg + 1) * 4
+        # start selection
+        start_selecting_mat = np.zeros((4, n_var))
+        start_selecting_mat[:4, :4] = np.eye(4)
+        selecting_mat.append(start_selecting_mat)
+        # waypoint selection
         for i in range(self.n_seg - 1):
-            Aeq_pos[i, self.n_poly * i:self.n_poly * (i + 1)] = self.get_motion_coef(self.seg_time[i])[0]
-            beq_pos[i] = self.waypoints[i + 1]
-        Aeq.append(Aeq_pos)
-        beq.append(beq_pos)
+            seg_end_selecting_mat = np.zeros((4, n_var))
+            p_idx = 4 + i
+            v_idx = 4 + 4 + self.n_seg - 1
+            a_idx = v_idx + 1
+            j_idx = a_idx + 1
+            seg_end_selecting_mat[0, p_idx] = 1
+            seg_end_selecting_mat[1, v_idx] = 1
+            seg_end_selecting_mat[2, a_idx] = 1
+            seg_end_selecting_mat[3, j_idx] = 1
+            seg_start_selecting_mat = seg_end_selecting_mat.copy()
+            selecting_mat.extend(
+                [seg_end_selecting_mat, seg_start_selecting_mat])
+        # end selection
+        end_selecting_mat = np.zeros((4, n_var))
+        end_selecting_mat[:4, list(range(4 + self.n_seg - 1, 4 + self.n_seg - 1 +
+                                 4))] = np.eye(4)
+        selecting_mat.append(end_selecting_mat)
+        return np.concatenate(selecting_mat, axis=0)
 ```
 
-#### 2.3.4 Continuity Constraints
-For the waypoints, we should add continuity constraints, which is
+
+
+
+
+Now, we can get
 $$
-\begin{aligned}
-\left[\begin{array}{cccc}
-p_{i^-}& v_{i^-}& a_{i^-} &j_{i^-} 
-\end{array}\right]^T & = \left[\begin{array}{cccc}
-p_{i^+}& v_{i^+}& a_{i^+} &j_{i^+} 
-\end{array}\right]^T \\
-\end{aligned}
+J=\left[\begin{array}{c}
+\mathbf{d}_F \\
+\mathbf{d}_P
+\end{array}\right]^T \underbrace{\mathbf{C} \boldsymbol{M}^{-T} \mathbf{Q} \boldsymbol{M}^{-1} \mathbf{C}^T}_{\mathbf{R}}\left[\begin{array}{l}
+\mathbf{d}_F \\
+\mathbf{d}_P
+\end{array}\right]=\left[\begin{array}{l}
+\mathbf{d}_F \\
+\mathbf{d}_P
+\end{array}\right]^T\left[\begin{array}{ll}
+\mathbf{R}_{F F} & \mathbf{R}_{F P} \\
+\mathbf{R}_{P F} & \mathbf{R}_{P P}
+\end{array}\right]\left[\begin{array}{l}
+\mathbf{d}_F \\
+\mathbf{d}_P
+\end{array}\right]
 $$
-And we can use $A_ip_i - A_{i+1}p_{i+1}=\textbf{0}$ to constraint continuity.
+We can quickly calculate the optimal values, which is 
+$$
+\mathbf{d}_P^*=-\mathbf{R}_{P P}^{-1} \mathbf{R}_{F P}^T \mathbf{d}_F
+$$
+Now, we can use $d_P^*$ to calculate the polynomial coefficients, which is
+$$
+coefficients = M^{-1}C^Td
+$$
+
 ```python
-        Aeq_continue = np.zeros((4 * (self.n_seg - 1), n_var))
-        beq_continue = np.zeros(4 * (self.n_seg - 1))
-        for i in range(self.n_seg - 1):
-            # the end of last segment
-            last_coef_mat_end = self.get_motion_coef(self.seg_time[i])
-            # the start of the next segment
-            next_coef_mat_start = self.get_motion_coef(0)
-            Aeq_continue[4 * i:4 * (i + 1),
-                         self.n_poly * i:self.n_poly * (i + 1)] = last_coef_mat_end
-            Aeq_continue[4 * i:4 * (i + 1),
-                         self.n_poly * (i + 1):self.n_poly * (i + 2)] = -next_coef_mat_start
+    def solve(self):
+        Q = self.get_quadratic_matrix()
+        M = self.get_mapping_matrix()
+        CT = self.get_selecting_matrix()
+        C = CT.T
+        R = C @ inv(M).T @ Q @ inv(M) @ (CT)
+        R_pp = R[self.n_seg + 7:, self.n_seg + 7:]
+        R_fp = R[:self.n_seg + 7, self.n_seg + 7:]
+        dF = np.zeros(8 + self.n_seg - 1)
+        dF[:4] = self.start_cond
+        dF[4:-4] = self.waypoints[1:-1]
+        dF[-4:] = self.end_cond
+        dP = -pinv(R_pp).dot(R_fp.T).dot(dF)
+        d = np.hstack([dF, dP])
+        res = inv(M).dot(CT).dot(d)
+        return res
 ```
 
 ### 3. Quick Start
 ```shell
+pip install -r requirements
 python main.py -n 5 -alloc proportion --show
 ```
 
