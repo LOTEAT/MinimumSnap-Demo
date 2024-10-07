@@ -2,10 +2,6 @@
  * @Author: LOTEAT
  * @Date: 2024-08-18 11:52:33
 -->
-<!--
- * @Author: LOTEAT
- * @Date: 2024-07-31 11:21:01
--->
 ## Minimum Snap Demo
 
 This is a repository for `Minimum Snap Model`. If you want to know more about `Minimum Snap Model`, you can read [this paper](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=5980409).
